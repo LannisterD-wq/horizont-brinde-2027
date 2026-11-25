@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Horizont · Boas festas</title>
+<style>
+  html,body{margin:0;height:100%;background:#0e0e10;color:#f0d496;font-family:Georgia,"Times New Roman",serif;overflow:hidden}
+  #ar{position:fixed;inset:0;overflow:hidden}
+  .tela{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:28px;box-sizing:border-box;z-index:20}
+  .fundo{background:radial-gradient(circle at 50% 35%,#2a2418 0%,#0e0e10 65%)}
+  h1{font-weight:normal;letter-spacing:.18em;font-size:30px;margin:0 0 6px}
+  .sub{letter-spacing:.35em;font-size:11px;color:#c9a45c;margin-bottom:34px}
+  .ola{font-size:22px;margin-bottom:10px;color:#f0d496}
+  p{color:#d8c49a;font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5;max-width:320px;margin:0 0 26px}
+  button{font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:16px;border:1px solid #c9a45c;background:#c9a45c;color:#0e0e10;padding:14px 28px;border-radius:999px;font-weight:600;min-width:240px;margin:6px}
+  button.sec{background:transparent;color:#f0d496}
+  #dica{position:fixed;left:0;right:0;bottom:calc(28px + env(safe-area-inset-bottom));text-align:center;z-index:15;font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;color:#fff;text-shadow:0 1px 4px #000;display:none}
+  #mira{position:fixed;left:50%;top:50%;width:78vw;max-width:420px;aspect-ratio:1.75;transform:translate(-50%,-50%);border:2px dashed rgba(240,212,150,.8);border-radius:14px;z-index:14;display:none}
+  #rec{position:fixed;top:calc(18px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:16;background:rgba(0,0,0,.55);color:#fff;font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;padding:8px 14px;border-radius:999px;display:none}
+  #rec i{display:inline-block;width:10px;height:10px;border-radius:50%;background:#e24b4a;margin-right:8px;vertical-align:middle;animation:pisca 1s infinite}
+  @keyframes pisca{50%{opacity:.2}}
+  #final video{width:min(78vw,360px);border-radius:14px;border:1px solid #c9a45c;margin-bottom:18px;background:#000}
+  .oculto{display:none!important}
+  .erro{color:#f09595}
+</style>
+<script type="importmap">
+{"imports":{"three":"./three/three.module.js","three/addons/":"./three/addons/"}}
+</script>
+</head>
+<body>
+<div id="ar"></div>
+<div id="mira"></div>
+<div id="dica">Aponte a câmera para o cartão</div>
+<div id="rec"><i></i>Gravando</div>
+
+<div id="inicio" class="tela fundo">
+  <h1>HORIZONT</h1>
+  <div class="sub">INVESTIMENTOS</div>
+  <div class="ola" id="ola">Olá!</div>
+  <p>Pegue o seu cartão, toque em começar e aponte a câmera para ele.</p>
+  <button id="btnComecar">Começar</button>
+  <p id="erro" class="erro oculto" style="margin-top:18px"></p>
+</div>
+
+<div id="final" class="tela fundo oculto">
+  <video id="preview" playsinline loop muted autoplay></video>
+  <button id="btnShare">Compartilhar no Stories</button>
+  <button id="btnDenovo" class="sec">Gravar de novo</button>
+  <p id="dicaShare" class="oculto" style="margin-top:14px"></p>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { MindARThree } from './lib/mindar-image-three.prod.js';
+
+const DURACAO = 7000;
+const params = new URLSearchParams(location.search);
+const nome = (params.get('n') || '').trim().slice(0, 40);
+document.getElementById('ola').textContent = nome ? `Olá, ${nome}!` : 'Olá!';
+
+const $ = id => document.getElementById(id);
+let mindar, renderer, scene, camera, anchor;
+let efeito = null, inicioEfeito = 0, gravando = false, gravador = null, pedacos = [], arquivo = null;
+let comp, ctx, timerDica;
+
+function texturaTexto(linhas, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  for (const l of linhas) {
+    g.font = l.font;
+    const grad = g.createLinearGradient(0, l.y - 60, 0, l.y + 60);
+    grad.addColorStop(0, '#fff3cf'); grad.addColorStop(.5, '#e2be78'); grad.addColorStop(1, '#a8823f');
+    g.shadowColor = 'rgba(255,200,110,.9)'; g.shadowBlur = 28;
+    g.fillStyle = grad; g.fillText(l.t, w / 2, l.y);
+  }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+function texturaBrilho() {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'); const r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,250,230,1)'); r.addColorStop(.25, 'rgba(255,215,140,.9)'); r.addColorStop(1, 'rgba(255,190,90,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+}
+
+function montarEfeito(grupo) {
+  const brilho = texturaBrilho();
+  const N = 500;
+  const pos = new Float32Array(N * 3), vel = [], atraso = [];
+  for (let i = 0; i < N; i++) {
+    pos[i*3] = (Math.random() - .5); pos[i*3+1] = (Math.random() - .5) * .57; pos[i*3+2] = 0;
+    vel.push(new THREE.Vector3((Math.random() - .5) * .6, (Math.random() - .2) * .6, .35 + Math.random() * .7));
+    atraso.push(i < 320 ? Math.random() * .6 : 3.2 + Math.random() * .5);
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ size: .09, map: brilho, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffd98a });
+  const pontos = new THREE.Points(geo, mat); grupo.add(pontos);
+
+  const anel = new THREE.Mesh(new THREE.RingGeometry(.48, .5, 96), new THREE.MeshBasicMaterial({ color: 0xf0d496, transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+  anel.position.z = .005; grupo.add(anel);
+
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: brilho, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0 }));
+  halo.scale.set(1.3, .55, 1); grupo.add(halo);
+
+  const logo = new THREE.Mesh(new THREE.PlaneGeometry(1, .3),
+    new THREE.MeshBasicMaterial({ map: texturaTexto([{ t: 'HORIZONT', font: 'bold 150px Georgia, serif', y: 140 }, { t: 'I N V E S T I M E N T O S', font: '40px Georgia, serif', y: 245 }], 1024, 300), transparent: true, depthWrite: false }));
+  grupo.add(logo);
+
+  const msg = nome ? `Feliz 2027, ${nome}!` : 'Feliz 2027!';
+  const texto = new THREE.Mesh(new THREE.PlaneGeometry(1, .14),
+    new THREE.MeshBasicMaterial({ map: texturaTexto([{ t: msg, font: 'italic 84px Georgia, serif', y: 70 }], 1024, 144), transparent: true, depthWrite: false, opacity: 0 }));
+  grupo.add(texto);
+
+  return { pontos, pos, vel, atraso, anel, halo, logo, texto };
+}
+
+function atualizarEfeito(t) {
+  const e = efeito; if (!e) return;
+  const p = e.pos;
+  for (let i = 0; i < e.vel.length; i++) {
+    const tt = t - e.atraso[i];
+    if (tt < 0) { p[i*3+2] = -10; continue; }
+    const v = e.vel[i];
+    if (p[i*3+2] === -10 || tt < .02) { p[i*3] = (Math.random() - .5); p[i*3+1] = (Math.random() - .5) * .57; p[i*3+2] = 0; }
+    p[i*3] += v.x * .016; p[i*3+1] += v.y * .016; p[i*3+2] = Math.max(0, v.z * tt - .12 * tt * tt);
+  }
+  e.pontos.geometry.attributes.position.needsUpdate = true;
+  e.pontos.material.opacity = t < 5.5 ? 1 : Math.max(0, 1 - (t - 5.5) / 1.2);
+
+  const a = Math.min(1, t / 1.1);
+  e.anel.scale.setScalar(.2 + a * 1.6); e.anel.material.opacity = 1 - a;
+
+  const s = THREE.MathUtils.smoothstep(t, .4, 2.0);
+  e.logo.position.set(0, .47 * s, .02 + .12 * s);
+  e.logo.rotation.x = (1 - s) * -1.2;
+  e.logo.scale.setScalar(.3 + .55 * s);
+  e.logo.rotation.y = Math.sin(t * 1.4) * .12 * s;
+
+  e.halo.position.set(0, .47 * s, .1 * s); e.halo.material.opacity = .55 * s * (0.85 + .15 * Math.sin(t * 5));
+
+  const m = THREE.MathUtils.smoothstep(t, 2.3, 3.1);
+  e.texto.material.opacity = m;
+  e.texto.position.set(0, -.42 + .015 * Math.sin(t * 2), .08 + .03 * m);
+  e.texto.scale.setScalar(.6 + .25 * m);
+}
+
+function prepararComposicao() {
+  const box = $('ar').getBoundingClientRect();
+    const fator = Math.min(2, window.devicePixelRatio || 1);
+  const k = Math.min(fator, 1280 / Math.max(box.width, box.height));
+  comp = document.createElement('canvas');
+  comp.width = Math.round(box.width * k / 2) * 2; comp.height = Math.round(box.height * k / 2) * 2;
+  ctx = comp.getContext('2d');
+}
+function desenharComposicao() {
+  const box = $('ar').getBoundingClientRect();
+  const k = comp.width / box.width;
+  const v = mindar.video, vr = v.getBoundingClientRect();
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, comp.width, comp.height);
+  ctx.drawImage(v, (vr.left - box.left) * k, (vr.top - box.top) * k, vr.width * k, vr.height * k);
+  const cr = renderer.domElement.getBoundingClientRect();
+  ctx.drawImage(renderer.domElement, (cr.left - box.left) * k, (cr.top - box.top) * k, cr.width * k, cr.height * k);
+}
+
+function tipoVideo() {
+  const op = ['video/mp4;codecs=avc1.42E01E', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm'];
+  return op.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+}
+function iniciarGravacao() {
+  prepararComposicao();
+  const stream = comp.captureStream(30);
+  const tipo = tipoVideo();
+  try { gravador = new MediaRecorder(stream, tipo ? { mimeType: tipo, videoBitsPerSecond: 6e6 } : undefined); }
+  catch (e) { gravador = new MediaRecorder(stream); }
+  pedacos = [];
+  gravador.ondataavailable = ev => ev.data.size && pedacos.push(ev.data);
+  gravador.onstop = finalizar;
+  gravador.start(250); gravando = true;
+  $('rec').style.display = 'block'; $('dica').style.display = 'none'; $('mira').style.display = 'none';
+  setTimeout(() => { gravando = false; gravador.state !== 'inactive' && gravador.stop(); }, DURACAO);
+}
+function finalizar() {
+  $('rec').style.display = 'none';
+  const tipo = (gravador.mimeType || 'video/mp4').split(';')[0];
+  const ext = tipo.includes('mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(pedacos, { type: tipo });
+  arquivo = new File([blob], `horizont-2027.${ext}`, { type: tipo });
+  $('preview').src = URL.createObjectURL(blob);
+  $('final').classList.remove('oculto');
+  mindar.stop(); renderer.setAnimationLoop(null);
+}
+
+async function compartilhar() {
+  if (arquivo && navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+    try { await navigator.share({ files: [arquivo] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = $('preview').src; a.download = arquivo.name; a.click();
+  const d = $('dicaShare'); d.classList.remove('oculto');
+  d.textContent = 'O vídeo foi salvo. Abra o Instagram, crie um Stories e escolha o vídeo na galeria.';
+}
+
+async function comecar() {
+  $('btnComecar').disabled = true; $('btnComecar').textContent = 'Abrindo a câmera…';
+  try {
+    mindar = new MindARThree({ container: $('ar'), imageTargetSrc: './card.mind', uiLoading: 'no', uiScanning: 'no', uiError: 'no', filterMinCF: .0001, filterBeta: .001 });
+    ({ renderer, scene, camera } = mindar);
+    anchor = mindar.addAnchor(0);
+    anchor.onTargetFound = () => {
+      if (!efeito) { efeito = montarEfeito(anchor.group); inicioEfeito = performance.now(); clearTimeout(timerDica); iniciarGravacao(); }
+    };
+    await mindar.start();
+    $('inicio').classList.add('oculto');
+    $('dica').style.display = 'block'; $('mira').style.display = 'block';
+    timerDica = setTimeout(() => { $('dica').textContent = 'Chegue mais perto e deixe o cartão inteiro na tela, com boa luz'; }, 9000);
+    renderer.setAnimationLoop(() => {
+      if (efeito) atualizarEfeito((performance.now() - inicioEfeito) / 1000);
+      renderer.render(scene, camera);
+      if (gravando) desenharComposicao();
+    });
+  } catch (e) {
+    console.error(e);
+    $('btnComecar').disabled = false; $('btnComecar').textContent = 'Tentar de novo';
+    const er = $('erro'); er.classList.remove('oculto');
+    er.textContent = 'Não consegui abrir a câmera. Permita o acesso à câmera e abra este link pelo Safari (iPhone) ou Chrome (Android).';
+  }
+}
+
+$('btnComecar').onclick = comecar;
+$('btnShare').onclick = compartilhar;
+$('btnDenovo').onclick = () => location.reload();
+</script>
+</body>
+</html>
